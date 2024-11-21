@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:os="http://www.mulesoft.org/schema/mule/os" xmlns:tls="http://www.mulesoft.org/schema/mule/tls"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/tls http://www.mulesoft.org/schema/mule/tls/current/mule-tls.xsd
+http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config" doc:id="0e8311ab-5419-4e43-8d7c-527fef1adb19" >
+		<http:listener-connection host="0.0.0.0" port="8081" />
+	</http:listener-config>
+	<http:request-config name="HTTP_Request_configuration" doc:name="HTTP Request configuration" doc:id="c134d9af-5b07-4699-b165-cc1806ec7b5e" basePath="/admin/api/2024-10" >
+		<http:request-connection protocol="HTTPS" host="vtldeveloper.myshopify.com" port="443" >
+		</http:request-connection>
+	</http:request-config>
+	<http:request-config name="HTTP_Request_configuration_temporal" doc:name="HTTP Request configuration" doc:id="92db5f07-c9dd-4924-9cb8-217d09832357" >
+		<http:request-connection protocol="HTTPS" host="localhost" port="8091">
+			<tls:context >
+				<tls:trust-store insecure="true" />
+				<tls:key-store type="jks" path="vtlKeyStore.jks" alias="mule" keyPassword="mule" password="123456" />
+			</tls:context>
+		</http:request-connection>
+	</http:request-config>
+	<os:object-store name="Object_store" doc:name="Object store" doc:id="c0fe4167-f567-46f9-81dc-b00b2b1f0c8f" persistent="false"/>
+	<flow name="fetch-orderFlow" doc:id="e9749a27-d333-4d90-a300-c646b71370e7" >
+		<!-- [STUDIO:"Listener"]<http:listener doc:name="Listener" doc:id="d66ba85b-b687-4777-80c4-f24125779d29" config-ref="HTTP_Listener_config" path="/fetchOrder"/> [STUDIO] -->
+		<ee:transform doc:name="vars.orderNames" doc:id="5b933e81-24b0-4cce-9200-dc46205ca4bd" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="orderNames" ><![CDATA[%dw 2.0
+output application/json
+---
+payload.name]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<parallel-foreach doc:name="Parallel For Each Order Name" doc:id="e531c3c5-9157-41e1-8910-b0cef9833fbc" collection="#[vars.orderNames]">
+				<http:request method="GET" doc:name="Fetch orders from Shopify" doc:id="f313c7b7-14db-482e-9d44-a0898c0d3c85" config-ref="HTTP_Request_configuration" path="/orders.json">
+				<http:headers><![CDATA[#[output application/java
+---
+{
+	"X-Shopify-Access-Token" : "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"
+}]]]></http:headers>
+				<http:query-params><![CDATA[#[output application/java
+---
+{
+	"name" : payload
+}]]]></http:query-params>
+			</http:request>
+				<ee:transform doc:name="get order's value" doc:id="a36a584d-c673-4812-b003-a60fd49621c8" >
+				<ee:message >
+					<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+payload.orders[0]]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<http:request method="POST" doc:name="Send each order to Temporal" doc:id="ba0de506-7a47-486d-8020-0c7384222dd8" config-ref="HTTP_Request_configuration_temporal" path="/webhook">
+				<http:headers><![CDATA[#[output application/java
+---
+{
+	"Content-Type" : "application/json"
+}]]]></http:headers>
+				</http:request>
+				<logger level="INFO" doc:name="Logger" doc:id="b05906cb-51bc-4701-afba-5209f7d017ce" message="#[payload]" />
+			</parallel-foreach>
+		<ee:transform doc:name="payload" doc:id="12971fd0-ef99-4987-a70e-d42627058c67">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+payload]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+	</flow>
+	<flow name="concurrencyFlow" doc:id="4b9e92be-db89-4752-95f6-c8884bd1015f" >
+		<os:retrieve doc:name="var.currentRequestCount = 0" doc:id="4ec28539-37bc-47eb-a523-83d70c174048" key="currentRequestCount" objectStore="Object_store" target="currentRequestCount">
+			<os:default-value ><![CDATA[0]]></os:default-value>
+		</os:retrieve>
+		<set-variable value="#[vars.currentRequestCount + 1]" doc:name="Set RequestCount + 1" doc:id="c9865811-455b-461b-90a8-89f4d72bdbe6" variableName="currentRequestCount" />
+		<os:store doc:name="currentRequestCount + 1" doc:id="5d5316d1-e907-420c-ac37-a6cf6ebda617" key="currentRequestCount" objectStore="Object_store">
+			<os:value><![CDATA[#[vars.currentRequestCount]]]></os:value>
+		</os:store>
+		<logger level="INFO" doc:name="vars.currentRequestCount" doc:id="97dc1531-1512-4780-95f4-708cf7afacfc" message='#["currentRequestCount: " ++ vars.currentRequestCount]' />
+		<choice doc:name="Choice" doc:id="cd6e9e7d-786f-4042-ab4d-4423a3188c29" >
+			<when expression="vars.currentRequestCount &gt; 1" >
+				<set-variable value="429" doc:name="Set httpStatus" doc:id="abdc012d-42ce-4b08-9270-778497a73471" variableName="httpStatus" />
+				<set-payload value="Too many requests, please try again later." doc:name="Set Payload" doc:id="36ae9490-71ee-43c2-9d25-bcdfa2b27403" />
+				<raise-error doc:name="Raise error" doc:id="03123547-ed84-43e6-a94d-07059f4273fb" type="APP:TOO_MANY_REQUESTS" description="Too many requests" />
+			</when>
+			<otherwise >
+				<logger level="INFO" doc:name="Processing request" doc:id="553c9117-6618-4e04-91e0-00e19b09638d" message="Processing request..." />
+				<ee:transform doc:name="wait" doc:id="e36adc0e-99c3-4838-acf0-11291d49d0bf" >
+					<ee:message >
+						<ee:set-payload ><![CDATA[%dw 2.0
+import * from dw::Runtime
+output application/json
+---
+payload wait  10000]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				<set-variable value="#[vars.currentRequestCount - 1]" doc:name="currentRequestCount - " doc:id="67460959-1629-490c-a83e-476100813ead" variableName="currentRequestCount" />
+				<os:store doc:name="currentRequestCount - 1" doc:id="1a377aec-8b31-4f76-a8d9-f4e7aae5e29f" key="currentRequestCount" objectStore="Object_store" >
+					<os:value ><![CDATA[#[vars.currentRequestCount]]]></os:value>
+				</os:store>
+				<logger level="INFO" doc:name="currentRequestCount final" doc:id="b078eb2b-00d2-49a3-a31b-4108bd42e06b" message='#["currentRequestCount final: " ++ vars.currentRequestCount]' />
+			</otherwise>
+		</choice>
+	</flow>
+</mule>
